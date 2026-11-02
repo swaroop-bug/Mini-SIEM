@@ -1,0 +1,13 @@
+id: SSH-001
+name: SSH brute force
+description: Many failed SSH logins from one IP against one account in a short time.
+severity: high
+mitre:
+  id: T1110.001
+  name: "Brute Force: Password Guessing"
+  tactic: Credential Access
+match:
+  event_type: ssh_failed_login
+group_by: [src_ip, user]
+threshold: 20
+window: 5m
