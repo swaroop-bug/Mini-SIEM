@@ -21,6 +21,20 @@ class TestAuthParser(unittest.TestCase):
         self.assertEqual(e["event_type"], "ssh_failed_login")
         self.assertEqual(e["user"], "admin")
 
+    def test_failed_publickey(self):
+        line = "Nov  1 10:50:12 ubuntu-vm sshd[2700]: Failed publickey for deploy from 192.0.2.99 port 50010 ssh2"
+        e = parse_line(line, YEAR)
+        self.assertEqual(e["event_type"], "ssh_failed_login")
+        self.assertEqual(e["user"], "deploy")
+        self.assertEqual(e["src_ip"], "192.0.2.99")
+        self.assertEqual(e["timestamp"], "2026-11-01T10:50:12")
+
+    def test_failed_publickey_invalid_user(self):
+        line = "Nov  1 10:51:00 ubuntu-vm sshd[2701]: Failed publickey for invalid user ghost from 192.0.2.99 port 50011 ssh2"
+        e = parse_line(line, YEAR)
+        self.assertEqual(e["event_type"], "ssh_failed_login")
+        self.assertEqual(e["user"], "ghost")
+
     def test_accepted_login(self):
         line = "Nov  1 10:02:15 ubuntu-vm sshd[2310]: Accepted password for swaroop from 192.168.1.20 port 51234 ssh2"
         e = parse_line(line, YEAR)
