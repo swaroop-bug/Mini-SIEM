@@ -1,0 +1,23 @@
+id: WEB-002
+name: SQL injection attempt
+description: Requests containing common SQL injection patterns. Paths are URL-decoded first.
+severity: high
+mitre:
+  id: T1190
+  name: Exploit Public-Facing Application
+  tactic: Initial Access
+match:
+  source: web
+regex:
+  path:
+    - '\bunion\b.{0,20}\bselect\b'                    # UNION SELECT ...
+    - '[\x27\x22]\s*(or|and)\s+\S'                    # ' OR 1=1  /  ' AND SLEEP(5)
+    - '\b(sleep|benchmark|pg_sleep)\s*\('             # time-based blind injection
+    - '\bwaitfor\s+delay\b'                           # same, MS SQL
+    - '\binformation_schema\b'                        # schema enumeration
+    - ';\s*(drop|insert|update|delete|alter)\b'       # stacked queries
+    - '[\x27\x22]\s*(--|#|/\*)'                       # quote followed by a comment
+    - '\border\s+by\s+\d+'                            # column-count probing
+group_by: [src_ip]
+threshold: 3
+window: 10m

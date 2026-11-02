@@ -1,0 +1,20 @@
+id: WEB-003
+name: Cross-site scripting (XSS) attempt
+description: Requests containing common XSS payload patterns. Paths are URL-decoded first.
+severity: medium
+mitre:
+  id: T1190
+  name: Exploit Public-Facing Application
+  tactic: Initial Access
+match:
+  source: web
+regex:
+  path:
+    - '<\s*script'                                    # <script>
+    - '<\s*(iframe|object|embed)\b'                   # embedded content
+    - '\bon(error|load|click|mouseover|focus)\s*='    # event-handler attributes
+    - 'javascript\s*:'                                # javascript: URLs
+    - 'document\.(cookie|location)'                   # cookie theft / redirect
+group_by: [src_ip]
+threshold: 3
+window: 10m

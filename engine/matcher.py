@@ -15,7 +15,8 @@ import db
 
 RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 SEVERITIES = ("low", "medium", "high", "critical")
-REQUIRED_KEYS = ("id", "name", "severity", "match", "group_by", "threshold", "window")
+REQUIRED_KEYS = ("id", "name", "severity", "mitre", "match", "group_by", "threshold", "window")
+MITRE_ID_RE = re.compile(r"^T\d{4}(\.\d{3})?$")      # T1110 or T1110.001
 DURATION_RE = re.compile(r"^(\d+)\s*([smhd])$")
 UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -33,6 +34,50 @@ def parse_duration(text):
     if not m:
         raise RuleError(f"bad duration {text!r} (use a number plus s/m/h/d, e.g. '5m')")
     return int(m.group(1)) * UNIT_SECONDS[m.group(2)]
+
+
+def validate_mitre(mitre, filename):
+    """Every rule must be tagged with a MITRE ATT&CK technique."""
+    if not isinstance(mitre, dict) or not all(mitre.get(k) for k in ("id", "name", "tactic")):
+        raise RuleError(f"{filename}: 'mitre' must have id, name and tactic")
+    if not MITRE_ID_RE.match(str(mitre["id"])):
+        raise RuleError(f"{filename}: mitre id {mitre['id']!r} should look like T1110 or T1110.001")
+
+
+def compile_regex(regex, filename):
+    """{'path': ['pat1', 'pat2']} -> {'path': [compiled1, compiled2]} (case-insensitive).
+
+    Compiling at load time means a typo in a pattern fails immediately with a clear
+    message, instead of crashing halfway through a detection run.
+    """
+    if not regex:
+        return {}
+    if not isinstance(regex, dict):
+        raise RuleError(f"{filename}: 'regex' must map a field to a pattern or list of patterns")
+    compiled = {}
+    for column, patterns in regex.items():
+        if column not in db.COLUMNS:
+            raise RuleError(f"{filename}: unknown field {column!r} in regex")
+        if isinstance(patterns, str):
+            patterns = [patterns]
+        try:
+            compiled[column] = [re.compile(p, re.IGNORECASE) for p in patterns]
+        except re.error as err:
+            raise RuleError(f"{filename}: bad regex in {column!r}: {err}")
+    return compiled
+
+
+def matches_regex(event, compiled):
+    """True if the event passes every regex check.
+
+    Across fields = AND (all fields must match); within a field = OR (any pattern).
+    An empty `compiled` means the rule has no regex section, so everything passes.
+    """
+    for column, patterns in compiled.items():
+        value = event[column]
+        if value is None or not any(p.search(value) for p in patterns):
+            return False
+    return True
 
 
 def validate_rule(rule, filename):
@@ -65,8 +110,9 @@ def validate_rule(rule, filename):
         if col not in allowed:
             raise RuleError(f"{filename}: unknown field {col!r}. Valid fields: {', '.join(db.COLUMNS)}")
 
+    validate_mitre(rule["mitre"], filename)
+    rule["compiled_regex"] = compile_regex(rule.get("regex"), filename)
     rule["window_seconds"] = parse_duration(rule["window"])
-    rule.setdefault("mitre", {})
     rule.setdefault("description", "")
     return rule
 
@@ -97,7 +143,9 @@ def fetch_events(conn, rule):
         clauses.append(f"{column} IN ({', '.join('?' for _ in values)})")
         params.extend(values)
     sql = "SELECT * FROM events WHERE " + " AND ".join(clauses) + " ORDER BY timestamp, id"
-    return conn.execute(sql, params).fetchall()
+    rows = conn.execute(sql, params).fetchall()
+    # SQL narrows things down first (cheap); regex then filters what's left (in Python).
+    return [row for row in rows if matches_regex(row, rule.get("compiled_regex", {}))]
 
 
 def group_events(events, group_by):

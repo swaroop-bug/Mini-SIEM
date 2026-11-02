@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import db
-from engine.matcher import (RuleError, detect_bursts, load_rules, parse_duration,
-                            run_detection, validate_rule)
+from engine.matcher import (RuleError, detect_bursts, load_rules, matches_regex,
+                            parse_duration, run_detection, validate_rule)
 
 BASE = datetime(2026, 11, 1, 10, 0, 0)
 
@@ -21,6 +21,7 @@ def make_events(offsets, user="root", ip="203.0.113.50"):
 
 def valid_rule(**overrides):
     rule = {"id": "T-1", "name": "t", "severity": "high",
+            "mitre": {"id": "T1110.001", "name": "Brute Force", "tactic": "Credential Access"},
             "match": {"event_type": "ssh_failed_login"},
             "group_by": ["src_ip"], "threshold": 5, "window": "1m"}
     rule.update(overrides)
@@ -100,6 +101,57 @@ class TestValidation(unittest.TestCase):
             validate_rule(valid_rule(threshold=0), "t.yaml")
 
 
+class TestMitreAndRegexValidation(unittest.TestCase):
+    def test_mitre_is_required(self):
+        rule = valid_rule()
+        del rule["mitre"]
+        with self.assertRaises(RuleError):
+            validate_rule(rule, "t.yaml")
+
+    def test_mitre_needs_all_three_parts(self):
+        with self.assertRaises(RuleError):
+            validate_rule(valid_rule(mitre={"id": "T1110"}), "t.yaml")
+
+    def test_mitre_id_format(self):
+        for bad in ("1110", "T11", "T1110.1", "ATT&CK"):
+            with self.assertRaises(RuleError):
+                validate_rule(valid_rule(mitre={"id": bad, "name": "x", "tactic": "y"}), "t.yaml")
+
+    def test_bad_regex_is_rejected_at_load_time(self):
+        with self.assertRaises(RuleError):
+            validate_rule(valid_rule(regex={"path": ["(unclosed"]}), "t.yaml")
+
+    def test_regex_unknown_field_rejected(self):
+        with self.assertRaises(RuleError):
+            validate_rule(valid_rule(regex={"nonsense": ["x"]}), "t.yaml")
+
+
+class TestMatchesRegex(unittest.TestCase):
+    def compiled(self, **regex):
+        return validate_rule(valid_rule(regex=regex), "t.yaml")["compiled_regex"]
+
+    def test_no_regex_means_everything_passes(self):
+        self.assertTrue(matches_regex({"path": "/anything"}, {}))
+
+    def test_any_pattern_in_a_field_matches(self):          # OR within a field
+        c = self.compiled(path=["union", "sleep"])
+        self.assertTrue(matches_regex({"path": "/x?id=sleep(5)"}, c))
+        self.assertFalse(matches_regex({"path": "/about"}, c))
+
+    def test_all_fields_must_match(self):                    # AND across fields
+        c = self.compiled(path=["admin"], user_agent=["sqlmap"])
+        self.assertTrue(matches_regex({"path": "/admin", "user_agent": "sqlmap/1.7"}, c))
+        self.assertFalse(matches_regex({"path": "/admin", "user_agent": "Firefox"}, c))
+
+    def test_case_insensitive(self):
+        c = self.compiled(path=["union select"])
+        self.assertTrue(matches_regex({"path": "1 UnIoN SeLeCt 1"}, c))
+
+    def test_null_field_never_matches(self):
+        c = self.compiled(user_agent=["curl"])
+        self.assertFalse(matches_regex({"user_agent": None}, c))
+
+
 class TestEndToEnd(unittest.TestCase):
     def test_full_pipeline(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -145,7 +197,8 @@ class TestEndToEnd(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for name in ("a.yaml", "b.yaml"):
                 (Path(tmp) / name).write_text(
-                    "id: DUP\nname: x\nseverity: low\nmatch: {event_type: x}\n"
+                    "id: DUP\nname: x\nseverity: low\nmitre: {id: T1110, name: x, tactic: y}\n"
+                    "match: {event_type: x}\n"
                     "group_by: [src_ip]\nthreshold: 1\nwindow: 1m\n")
             with self.assertRaises(RuleError):
                 load_rules(tmp)

@@ -1,0 +1,14 @@
+id: WEB-001
+name: Web directory scanning
+description: One IP generates a burst of 404s, typical of wordlist/directory scanners.
+severity: medium
+mitre:
+  id: T1595.003
+  name: "Active Scanning: Wordlist Scanning"
+  tactic: Reconnaissance
+match:
+  source: web
+  status: 404
+group_by: [src_ip]
+threshold: 20
+window: 2m
